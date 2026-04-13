@@ -444,6 +444,17 @@ async def build_scan_response(code_text: str, source_meta: dict | None = None) -
     return final_response
 
 
+@app.get("/health")
+async def health() -> dict:
+    # Check if Ollama is reachable
+    try:
+        ollama.list()
+        ollama_status = "running"
+    except Exception:
+        ollama_status = "not_found"
+    return {"status": "ok", "ollama": ollama_status}
+
+
 @app.post("/scan/quick")
 async def scan_quick(data: ScanRequest) -> dict:
     """Returns ML-only result instantly."""
