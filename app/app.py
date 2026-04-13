@@ -226,7 +226,7 @@ def run_scan(mode: str, text: str | None = None, repo_url: str | None = None, up
         with st.spinner("CyberGuard: Quick Risk Assessment..."):
             try:
                 # 1. Quick ML Scan (Instant)
-                resp = requests.post(f"{SERVER_URL}/scan/quick", json={"code": text}, timeout=30)
+                resp = requests.post(f"{SERVER_URL}/scan/quick", json={"code": text}, timeout=250)
                 if resp.status_code == 200:
                     quick_data = resp.json()
                     st.session_state.report = quick_data
