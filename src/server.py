@@ -1,9 +1,11 @@
 import asyncio
 import csv
+import hashlib
+import pandas as pd
+import numpy as np
 from pathlib import Path
 
 import joblib
-import numpy as np
 import ollama
 import uvicorn
 import xgboost as xgb
@@ -27,7 +29,7 @@ TRAINING_DATASET_PATH = DATA_DIR / "training_dataset.csv"
 PROCESSED_TRAINING_PATH = DATA_DIR / "processed_training.csv"
 LABEL_ENCODER_PATH = MODELS_DIR / "label_encoder.joblib"
 
-RETRAIN_THRESHOLD = 5
+RETRAIN_THRESHOLD = 3
 
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -112,15 +114,20 @@ async def ollama_chat_safe(model: str, messages: list[dict], options: dict | Non
 async def auto_retrain_model():
     """Triggers automated retraining once threshold is met."""
     try:
-        df = pd.read_csv(TRAINING_DATASET_PATH)
+        try:
+            df = pd.read_csv(TRAINING_DATASET_PATH)
+        except UnicodeDecodeError:
+            # Fallback for Windows-style encoding (powershell redirection)
+            df = pd.read_csv(TRAINING_DATASET_PATH, encoding='utf-16')
+        
         if len(df) < RETRAIN_THRESHOLD:
             return
 
-        print(f"🔄 Automatic Retraining Triggered: Processing {len(df)} new samples...")
+        print(f"Automatic Retraining Triggered: Processing {len(df)} new samples...")
         
         # 1. Load context
         if not (MODEL_PATH.exists() and VECTORIZER_PATH.exists() and LABEL_ENCODER_PATH.exists()):
-            print("❌ Cannot retrain: Model files missing.")
+            print("Cannot retrain: Model files missing.")
             return
 
         booster = xgb.Booster()
@@ -137,7 +144,7 @@ async def auto_retrain_model():
             # Map labels precisely to what the LabelEncoder knows
             y = label_encoder.transform(new_labels)
         except Exception as ee:
-            print(f"⚠️ Label Encoding Issue: {ee}. Attempting auto-correction...")
+            print(f"Label Encoding Issue: {ee}. Attempting auto-correction...")
             # If 'High_Risk', try 'High'
             corrected = [l.split('_')[0].capitalize() if '_' in l else l.capitalize() for l in new_labels]
             y = label_encoder.transform(corrected)
@@ -165,10 +172,10 @@ async def auto_retrain_model():
             writer = csv.writer(f)
             writer.writerow(["code_context", "label", "source"])
             
-        print("✅ Automatic Retraining Complete. Model updated.")
+        print("Automatic Retraining Complete. Model updated.")
         
     except Exception as e:
-        print(f"❌ Auto-retrain failed: {e}")
+        print(f"Auto-retrain failed: {e}")
 
 
 def enforce_two_lines(text: str) -> str:
@@ -397,15 +404,35 @@ async def build_scan_response(code_text: str, source_meta: dict | None = None) -
     return final_response
 
 
-@app.get("/health")
-async def health() -> dict:
-    # Check if Ollama is reachable
+@app.post("/scan/quick")
+async def scan_quick(data: ScanRequest) -> dict:
+    """Returns ML-only result instantly."""
     try:
-        ollama.list()
-        ollama_status = "running"
-    except Exception:
-        ollama_status = "not_found"
-    return {"status": "ok", "ollama": ollama_status}
+        score, risk, flagged, highlighted, zday, zreason, conf, boosted = compute_risk(data.code)
+        return {
+            "score": round(score, 2),
+            "final_risk": risk,
+            "confidence": conf,
+            "is_boosted": boosted,
+            "flagged_lines": flagged,
+            "highlighted_code": highlighted,
+            "is_zero_day": zday,
+            "zero_day_reason": zreason
+        }
+    except Exception as e:
+        print(f"Quick scan error: {e}")
+        return {"error": str(e)}
+
+@app.post("/scan/deep")
+async def scan_deep(data: ScanRequest) -> dict:
+    """Returns AI-only analysis on top of existing score."""
+    try:
+        score, _, _, _, _, _, _, _ = compute_risk(data.code)
+        ai_report = await get_hybrid_ai_report(data.code, score)
+        return ai_report
+    except Exception as e:
+        print(f"Deep scan error: {e}")
+        return {"exact_analysis": "AI analysis unavailable.", "worst_case": "N/A", "story": "N/A"}
 
 
 # Optimized Scan Route with Local Error Handling

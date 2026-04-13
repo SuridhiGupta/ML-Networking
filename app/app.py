@@ -222,19 +222,50 @@ def call_scan_endpoint(mode: str, text: str | None = None, repo_url: str | None 
     return requests.post(f"{SERVER_URL}/scan-file", files=files, timeout=120)
 
 def run_scan(mode: str, text: str | None = None, repo_url: str | None = None, uploaded_file=None) -> None:
-    with st.spinner("Scanning code..."):
-        response = call_scan_endpoint(mode, text=text, repo_url=repo_url, uploaded_file=uploaded_file)
-    if response.status_code != 200:
-        st.error(f"Scan failed: {response.text}")
-        return
+    if mode == "manual" and text:
+        with st.spinner("CyberGuard: Quick Risk Assessment..."):
+            try:
+                # 1. Quick ML Scan (Instant)
+                resp = requests.post(f"{SERVER_URL}/scan/quick", json={"code": text}, timeout=30)
+                if resp.status_code == 200:
+                    quick_data = resp.json()
+                    st.session_state.report = quick_data
+                    st.session_state.current_code = text
+                    st.session_state.source_meta = {}
+                    st.session_state.solution = None
+                    
+                    # Force a temporary display by updating state
+                    st.toast("⚡ Quick scan complete! fetching deep analysis...")
+                else:
+                    st.error("Quick scan failed.")
+                    return
+            except Exception as e:
+                st.error(f"Connection Error: {e}")
+                return
 
-    payload = response.json()
-    st.session_state.report = payload.get("report", {})
-    st.session_state.source_meta = payload.get("source_meta", {})
-    st.session_state.solution = None
-    st.session_state.solution_decision = None
-    if mode == "manual":
-        st.session_state.current_code = text or ""
+        # 2. Deep AI Analysis (Step 2 - Patch)
+        with st.status("Deep AI Security Analysis...", expanded=False) as status:
+            try:
+                deep_resp = requests.post(f"{SERVER_URL}/scan/deep", json={"code": text}, timeout=120)
+                if deep_resp.status_code == 200:
+                    deep_data = deep_resp.json()
+                    # Merge deep data (Expert Analysis, Worst Case, etc.) into the report
+                    st.session_state.report = {**st.session_state.report, **deep_data}
+                    status.update(label="✅ Full Analysis Complete!", state="complete", expanded=False)
+                    st.rerun()
+            except Exception:
+                status.update(label="⚠️ AI Analysis partially unavailable.", state="error")
+    else:
+        # For GitHub/File, stick to full scan for accuracy
+        with st.spinner("Scanning repository/file..."):
+            response = call_scan_endpoint(mode, text=text, repo_url=repo_url, uploaded_file=uploaded_file)
+            if response.status_code == 200:
+                payload = response.json()
+                st.session_state.report = payload.get("report", {})
+                st.session_state.source_meta = payload.get("source_meta", {})
+                st.session_state.solution = None
+            else:
+                st.error(f"Scan failed: {response.text}")
 
 def generate_pdf_report(report: dict) -> bytes:
     pdf = FPDF()
