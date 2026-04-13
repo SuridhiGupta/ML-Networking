@@ -226,7 +226,7 @@ def run_scan(mode: str, text: str | None = None, repo_url: str | None = None, up
         with st.spinner("CyberGuard: Quick Risk Assessment..."):
             try:
                 # 1. Quick ML Scan (Instant)
-                resp = requests.post(f"{SERVER_URL}/scan/quick", json={"code": text}, timeout=250)
+                resp = requests.post(f"{SERVER_URL}/scan/quick", json={"code": text}, timeout=120)
                 if resp.status_code == 200:
                     quick_data = resp.json()
                     st.session_state.report = quick_data
@@ -328,17 +328,33 @@ def generate_pdf_report(report: dict) -> bytes:
     pdf.multi_cell(0, 6, clean_text(report.get("story", "No analysis provided.")))
     pdf.ln(10)
 
-    # Code Context Section
+    # Code Evidence Section
     pdf.set_fill_color(240, 240, 240)
     pdf.set_font("helvetica", "B", 16)
     pdf.cell(0, 12, " 3. Code Evidence", ln=True, fill=True)
     pdf.ln(5)
-    
+
     pdf.set_font("courier", "", 9)
-    # Clean up code text for PDF encoding
     code_text = clean_text(report.get("original_code", ""))
     pdf.multi_cell(0, 5, code_text)
-    
+
+    pdf.ln(10)
+
+    # Recommendation Section
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font("helvetica", "B", 16)
+    pdf.cell(0, 12, " 4. CyberGuard Recommendation", ln=True, fill=True)
+    pdf.ln(5)
+
+    pdf.set_font("helvetica", "", 11)
+    pdf.multi_cell(
+    0,
+    6,
+    clean_text(
+        "Immediate remediation recommended. Avoid dangerous execution functions, validate user inputs, and apply secure coding practices before deployment."
+    )
+)
+
     return bytes(pdf.output())
 
 def render_step_flow() -> None:
@@ -561,17 +577,11 @@ def render_floating_chatbot() -> None:
                             data = response.json()
                             answer = data.get("response", "No response")
                             if not answer.strip():
-                                answer = "I'm processing your request. Could you please rephrase or ask something else?"
-                            
-                            if "OLLAMA_NOT_FOUND" in answer:
-                                st.error("🚨 **Ollama Not Found!**")
-                                st.info("Please download and install Ollama from [ollama.com](https://ollama.com) to enable the AI chatbot.")
-                                st.session_state.chat_messages.pop()
-                                return
+                                answer = "CyberGuard AI is temporarily unavailable. Please try again."
                         else:
                             answer = f"⚠️ CyberGuard is currently busy. Please try again in a few seconds. (Error: {response.text[:50]})"
                     except Exception as e:
-                        answer = "⚠️ Connection to CyberGuard lost. Please ensure Ollama is running."
+                        answer = "⚠️ Connection to CyberGuard lost. Please try again in a few moments."
                         
                     st.session_state.chat_messages.append({"role": "assistant", "content": answer})
                     st.rerun()

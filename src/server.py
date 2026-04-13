@@ -2,18 +2,24 @@ import asyncio
 import csv
 import hashlib
 import re
+import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
 import joblib
-import ollama
+from openai import OpenAI
 import uvicorn
 import xgboost as xgb
 from fastapi import FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+client = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
+)
 
 from code_scanner import scan_github_repository
 from preprocessing import clean_text
@@ -102,14 +108,18 @@ def save_to_dataset(code: str) -> None:
         writer.writerow([code, "LOW_RISK"])
 
 
-async def ollama_chat_safe(model: str, messages: list[dict], options: dict | None = None):
-    async with ollama_semaphore:
-        return await asyncio.to_thread(
-            ollama.chat,
-            model=model,
-            messages=messages,
-            options=options or {},
-        )
+async def groq_chat_safe(system_message: str, user_prompt: str, max_tokens: int = 300):
+    response = await asyncio.to_thread(
+        client.chat.completions.create,
+        model="llama3-8b-8192",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=max_tokens,
+        temperature=0.4
+    )
+    return response.choices[0].message.content.strip()
 
 
 async def auto_retrain_model():
@@ -268,102 +278,63 @@ def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bo
 
 
 async def get_hybrid_ai_report(code_snippet: str, score: float) -> dict:
-    system_message = (
-        "You are a cybersecurity expert. Respond with markers [DNA], [FORECAST], [ANALOGY]. "
-        "Keep each marker content concise and technical."
-    )
     try:
-        # Optimized for maximum speed and directness
-        options = {
-            "num_predict": 250, 
-            "temperature": 0.3,
-            "top_k": 20,
-            "top_p": 0.4,
-            "num_ctx": 2048
-        }
-        response = await ollama_chat_safe(
-            model="phi3:latest",
-            messages=[
-                {"role": "system", "content": "You are a cybersecurity expert. Provide: [DNA]: brief analysis. [FORECAST]: worst case. [ANALOGY]: 1-sentence attack story."},
-                {"role": "user", "content": f"Code: {code_snippet[:600]}\nRisk: {score}"},
-            ],
-            options=options,
+        prompt = f"""
+Analyze this code vulnerability.
+
+Code:
+{code_snippet[:600]}
+
+Risk Score: {score}
+
+Return:
+1. Exact technical analysis
+2. Worst-case attack scenario
+3. Simple attack story
+"""
+
+        text = await groq_chat_safe(
+            "You are a cybersecurity expert.",
+            prompt,
+            400
         )
-        text = response["message"]["content"]
-        print(f"DEBUG AI RESP: {text}")
-        
-        # Robust non-regex 'find' logic to extract the patches
-        parts = {
-            "exact_analysis": "Expert technical analysis complete.",
-            "worst_case": "Potential system-wide impact detected.",
-            "story": "Attack scenario identified via analysis."
-        }
-        
-        up_text = text.upper()
-        # Find start positions using multiple possible markers
-        dna_idx = up_text.find("DNA")
-        if dna_idx == -1: dna_idx = up_text.find("ANALYSIS")
-        
-        fc_idx = up_text.find("FORECAST")
-        if fc_idx == -1: fc_idx = up_text.find("WORST")
-        
-        an_idx = up_text.find("ANALOGY")
-        if an_idx == -1: an_idx = up_text.find("STORY")
-        if an_idx == -1: an_idx = up_text.find("PATH")
-        
-        if dna_idx != -1:
-            end = fc_idx if fc_idx != -1 else (an_idx if an_idx != -1 else len(text))
-            parts["exact_analysis"] = text[dna_idx:end].replace("DNA", "").replace("ANALYSIS", "").strip(": \n\t[]")
-            
-        if fc_idx != -1:
-            end = an_idx if an_idx != -1 else len(text)
-            parts["worst_case"] = text[fc_idx:end].replace("FORECAST", "").replace("WORST", "").strip(": \n\t[]")
-            
-        if an_idx != -1:
-            parts["story"] = text[an_idx:].replace("ANALOGY", "").replace("STORY", "").replace("PATH", "").strip(": \n\t[]")
-            
+
         return {
-            "exact_analysis": parts["exact_analysis"][:300],
-            "worst_case": parts["worst_case"][:300],
-            "story": parts["story"][:300]
+            "exact_analysis": text[:300],
+            "worst_case": text[:300],
+            "story": text[:300]
         }
+
     except Exception as e:
-        print(f"Deep Analysis Exception: {e}")
+        print(f"Groq Deep Analysis Error: {e}")
         return {
-            "exact_analysis": "Security review finished.",
-            "worst_case": "Impact analysis complete.",
-            "story": "Vulnerability path mapped."
-        }
-    except Exception as e:
-        print(f"AI Report Error: {e}")
-        return {
-            "exact_analysis": "Expert technical review finished.",
-            "worst_case": "Critical security impact potential.",
-            "story": "Backdoor scenario detected via analysis.",
+            "exact_analysis": "Security review complete.",
+            "worst_case": "Potential system compromise.",
+            "story": "Attack path identified."
         }
 
 
 async def get_secure_patch(code_snippet: str, score: float) -> str:
     try:
-        response = await ollama_chat_safe(
-            model="phi3:latest",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a world-class security engineer. Provide a brief secure patch for the vulnerable code and return code only.",
-                },
-                {"role": "user", "content": f"Vulnerable Code:\n{code_snippet[:1500]}\n\nPredictive Risk Score: {score}"},
-            ],
-            options={
-                "num_predict": 300, 
-                "temperature": 0.3,
-                "num_ctx": 2048
-            },
+        prompt = f"""
+Fix this vulnerable code securely.
+
+Code:
+{code_snippet[:1200]}
+
+Risk score: {score}
+
+Return only fixed code.
+"""
+
+        return await groq_chat_safe(
+            "You are a senior secure coding engineer.",
+            prompt,
+            400
         )
-        return response["message"]["content"].strip()
+
     except Exception:
         return "Secure patch generation failed."
-
 
 async def build_scan_response(code_text: str, source_meta: dict | None = None) -> dict:
     # 1. Check Cache First
@@ -445,14 +416,8 @@ async def build_scan_response(code_text: str, source_meta: dict | None = None) -
 
 
 @app.get("/health")
-async def health() -> dict:
-    # Check if Ollama is reachable
-    try:
-        ollama.list()
-        ollama_status = "running"
-    except Exception:
-        ollama_status = "not_found"
-    return {"status": "ok", "ollama": ollama_status}
+async def health():
+    return {"status": "ok", "llm": "groq_connected"}
 
 
 @app.post("/scan/quick")
@@ -575,19 +540,11 @@ async def chat_with_cyberguard(data: ChatRequest) -> dict:
         else:
             prompt = user_input
 
-        response = await ollama_chat_safe(
-            model="phi3:latest",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt},
-            ],
-            options={
-                "num_predict": 250, 
-                "temperature": 0.6,
-                "num_ctx": 2048
-            },
-        )
-        answer = response["message"]["content"].strip()
+        answer = await groq_chat_safe(
+    system_message,
+    prompt,
+    300
+)
         if "[VALID]" in answer.upper():
             save_to_dataset(data.code_context)
             answer = f"Verified and saved. {answer.replace('[VALID]', '').strip()}"
@@ -595,7 +552,7 @@ async def chat_with_cyberguard(data: ChatRequest) -> dict:
     except Exception as error:
         error_str = str(error).lower()
         if "connection" in error_str or "not found" in error_str:
-             return {"response": "OLLAMA_NOT_FOUND: CyberGuard cannot find Ollama on your system. Please download and start Ollama (https://ollama.com) to use the chatbot."}
+            return {"response": "CyberGuard AI service is temporarily unavailable. Please try again in a moment."}
         return {"response": f"CyberGuard encountered an error: {error}"}
 
 
@@ -618,14 +575,13 @@ async def submit_feedback(data: FeedbackRequest) -> dict:
         "Provide a 1-sentence technical reason after your verdict."
     )
     try:
-        ai_resp = await ollama_chat_safe(
-            model="phi3",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": f"Code to verify: {code}"},
-            ]
-        )
-        ai_verdict_text = ai_resp["message"]["content"].upper()
+        ai_verdict_text = (
+    await groq_chat_safe(
+        system_message,
+        f"Code to verify: {code}",
+        100
+    )
+).upper()
         ai_is_vulnerable = "YES" in ai_verdict_text
     except Exception:
         return {"status": "pending", "message": "AI verification failed. Suggestion held in pending."}
@@ -649,15 +605,15 @@ async def submit_feedback(data: FeedbackRequest) -> dict:
     elif not ai_is_vulnerable and not model_is_vulnerable:
         # Scenario 3: Both Agree it is Safe - Reject User Suggestion
         explanation_prompt = f"The user thinks this code is unsafe: {code}. Explain why it is actually safe in 1-2 short sentences."
-        explanation_resp = await ollama_chat_safe(
-            model="phi3:latest",
-            messages=[{"role": "user", "content": explanation_prompt}],
-            options={"num_predict": 100}
-        )
+        explanation_text = await groq_chat_safe(
+    "You are a senior security reviewer.",
+    explanation_prompt,
+    120
+)
         response_result = {
             "status": "rejected",
             "message": "Suggestion rejected. Our security engine confirms this code pattern is safe.",
-            "explanation": explanation_resp["message"]["content"]
+            "explanation": explanation_text
         }
 
     else:

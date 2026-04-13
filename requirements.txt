@@ -6,10 +6,10 @@ streamlit
 urllib3
 fastapi
 uvicorn
-ollama
 xgboost
 numpy
 python-multipart
 nltk
 google-generativeai
 fpdf
+openai
