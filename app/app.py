@@ -212,7 +212,7 @@ def render_risk_chip(risk: str) -> None:
         cls = "risk-high"
     else:
         cls = "risk-low"
-    st.markdown(f"<span class='risk-chip {cls}'>{risk_upper}</span>", unsafe_allow_html=True)
+    st.markdown(f"<div class='{cls}' style='text-align: center; border-radius: 100px; padding: 8px;'>{risk_upper}</div>", unsafe_allow_html=True)
 
 def call_scan_endpoint(mode: str, text: str | None = None, repo_url: str | None = None, uploaded_file=None):
     if mode == "manual":
@@ -275,7 +275,7 @@ def run_scan(mode: str, text: str | None = None, repo_url: str | None = None, up
             response = call_scan_endpoint(mode, text=text, repo_url=repo_url, uploaded_file=uploaded_file)
             if response.status_code == 200:
                 payload = response.json()
-                st.session_state.report = payload.get("report", {})
+                st.session_state.report = payload
                 st.session_state.source_meta = payload.get("source_meta", {})
                 st.session_state.solution = None
             else:
@@ -309,12 +309,14 @@ def generate_pdf_report(report: dict) -> bytes:
     pdf.ln(5)
     
     pdf.set_font("helvetica", "", 12)
-    pdf.cell(0, 8, f"Final Risk Level: {clean_text(report.get('final_risk'))}", ln=True)
+    pdf.cell(0, 8, f"Final Risk Level: {clean_text(report.get('risk_level'))}", ln=True)
     pdf.cell(0, 8, f"Risk Score: {report.get('score', 0)} / 10.0", ln=True)
     pdf.cell(0, 8, f"Confidence: {clean_text(report.get('confidence'))}", ln=True)
-    if report.get("is_zero_day"):
+    
+    zero_day_msg = report.get('zero_day', '')
+    if "found" not in str(zero_day_msg).lower():
         pdf.set_text_color(200, 0, 0)
-        pdf.cell(0, 8, "Zero-Day Behavioral Pattern: Detected!", ln=True)
+        pdf.multi_cell(0, 8, f"ALERT: {clean_text(zero_day_msg)}")
         pdf.set_text_color(0, 0, 0)
     pdf.ln(10)
 
@@ -325,21 +327,15 @@ def generate_pdf_report(report: dict) -> bytes:
     pdf.ln(5)
 
     pdf.set_font("helvetica", "B", 13)
-    pdf.cell(0, 8, "Technical DNA (Exact Analysis):", ln=True)
-    pdf.set_font("helvetica", "", 11)
-    pdf.multi_cell(0, 6, clean_text(report.get("exact_analysis", "No analysis provided.")))
-    pdf.ln(5)
-
-    pdf.set_font("helvetica", "B", 13)
-    pdf.cell(0, 8, "Forecast (Worst Case Scenario):", ln=True)
+    pdf.cell(0, 8, "Worst Case Scenario:", ln=True)
     pdf.set_font("helvetica", "", 11)
     pdf.multi_cell(0, 6, clean_text(report.get("worst_case", "No analysis provided.")))
     pdf.ln(5)
 
     pdf.set_font("helvetica", "B", 13)
-    pdf.cell(0, 8, "Analogy (Attack Path Story):", ln=True)
+    pdf.cell(0, 8, "Attack Path Story:", ln=True)
     pdf.set_font("helvetica", "", 11)
-    pdf.multi_cell(0, 6, clean_text(report.get("story", "No analysis provided.")))
+    pdf.multi_cell(0, 6, clean_text(report.get("attack_story", "No analysis provided.")))
     pdf.ln(10)
 
     # Code Evidence Section
@@ -364,9 +360,7 @@ def generate_pdf_report(report: dict) -> bytes:
     pdf.multi_cell(
         0,
         6,
-        clean_text(
-            "Immediate remediation recommended. Avoid dangerous execution functions, validate user inputs, and apply secure coding practices before deployment."
-        )
+        clean_text(report.get("recommendation", "Immediate remediation recommended. Follow secure coding standards."))
 )
 
     return bytes(pdf.output())
@@ -384,7 +378,7 @@ def render_step_flow() -> None:
     # 1. Score & Chip
     col_chip, col_download = st.columns([1, 1])
     with col_chip:
-        render_risk_chip(report.get("final_risk", "LOW"))
+        render_risk_chip(report.get("risk_level", "LOW"))
         st.write(f"Risk Score: **{report.get('score', 0):.2f} / 10.0** | Confidence: **{report.get('confidence', 'N/A')}**")
     
     if is_new: time.sleep(0.6)
@@ -410,16 +404,17 @@ def render_step_flow() -> None:
         
     # 4. Attack Story
     with st.expander("📖 The Story / Attack Path", expanded=is_new):
-        st.write(report.get("story", "Analysis pending..."))
+        st.write(report.get("attack_story", "Analysis pending..."))
         
     if is_new: time.sleep(0.5)
         
     # 5. Zero-Day
     with st.expander("🦠 Zero-Day Potential", expanded=False):
-        if report.get("is_zero_day"):
-            st.error(f"WARNING: Highly deceptive zero-day pattern detected! {report.get('zero_day_reason', '')}")
+        zero_day_val = report.get("zero_day", "")
+        if "detected" in str(zero_day_val).lower() or "warning" in str(zero_day_val).lower():
+            st.error(f"WARNING: {zero_day_val}")
         else:
-            st.success("No immediate zero-day behavioral patterns found. Standard analysis applies.")
+            st.success(zero_day_val or "No immediate zero-day behavioral patterns found.")
     
     # Reset flag so it doesn't re-animate on every interaction
     if is_new:

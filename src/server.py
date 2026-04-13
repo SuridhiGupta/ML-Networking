@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import time
 import csv
 import hashlib
@@ -135,7 +136,7 @@ async def groq_chat_safe(system_message: str, user_prompt: str, max_tokens: int 
     try:
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": user_prompt},
@@ -146,7 +147,7 @@ async def groq_chat_safe(system_message: str, user_prompt: str, max_tokens: int 
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"⚠️ Groq AI API Error: {e}")
-        return f"AI Service temporarily unavailable. Please apply secure input validation and avoid unsafe execution methods. Details: {str(e)[:50]}"
+        return f"AI Service temporarily unavailable. Details: {str(e)[:50]}"
 
 
 async def auto_retrain_model():
@@ -263,7 +264,7 @@ def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bo
     has_dangerous_calls = any(token in code_text for token in ["os.", "exec", "eval"])
     is_zero_day = has_network and has_dangerous_calls
 
-    base_cvss = min(((0.3 if flagged_lines else 0.0) + (0.4 if is_zero_day else 0.0)) * 10.0, 10.0)
+    base_cvss = min(((0.5 if flagged_lines else 0.0) + (0.4 if is_zero_day else 0.0)) * 10.0, 10.0)
     if base_cvss == 0.0:
         base_cvss = 1.0
 
@@ -423,27 +424,17 @@ async def build_scan_response(code_text: str, source_meta: dict | None = None) -
     ai_report = await get_hybrid_ai_report(code_text, score)
 
     final_response = {
-        "report": {
-            "final_risk": risk,
-            "score": round(score, 2),
-            "confidence": confidence,
-            "is_boosted": is_boosted,
-            "flagged_lines": flagged_lines,
-            "highlighted_code": highlighted_code,
-            "is_zero_day": is_zero_day,
-            "zero_day_reason": zero_day_reason,
-            "original_code": code_text,
-            "has_solution": True,
-            "worst_case": ai_report.get("worst_case", "Analysis complete."),
-            "story": ai_report.get("story", "Breach possibility detected."),
-            "exact_analysis": ai_report.get("exact_analysis", "Review risky patterns."),
-        },
-        "source_meta": source_meta or {},
-        "flow": {
-            "step_1": "Review highlighted code.",
-            "step_2": "Click 'Get AI Solution?' for a fix.",
-            "step_3": "Apply secure patch.",
-        },
+        "risk_level": risk,
+        "score": round(score, 2),
+        "confidence": confidence,
+        "worst_case": ai_report.get("worst_case", "Analysis complete."),
+        "attack_story": ai_report.get("story", "Breach possibility detected."),
+        "zero_day": zero_day_reason or "No immediate zero-day behavioral patterns found.",
+        "recommendation": "Immediate remediation recommended. Avoid dangerous execution functions, validate user inputs, and apply secure coding practices.",
+        "patch": "Click 'Get AI Solution?' to generate a secure code fix.",
+        "original_code": code_text,
+        "flagged_lines": flagged_lines,
+        "highlighted_code": highlighted_code,
     }
 
     # Update cache (with size management)
@@ -494,18 +485,21 @@ async def scan_quick(data: ScanRequest) -> dict:
     try:
         score, risk, flagged, highlighted, zday, zreason, conf, boosted = compute_risk(data.code)
         return {
+            "risk_level": risk,
             "score": round(score, 2),
-            "final_risk": risk,
             "confidence": conf,
-            "is_boosted": boosted,
+            "worst_case": "AI Deep Analysis pending...",
+            "attack_story": "AI Deep Analysis pending...",
+            "zero_day": zreason or "No immediate zero-day behavioral patterns found.",
+            "recommendation": "ML quick scan complete. Waiting for AI deep analysis.",
+            "patch": "Scanning for secure solution...",
+            "original_code": data.code,
             "flagged_lines": flagged,
             "highlighted_code": highlighted,
-            "is_zero_day": zday,
-            "zero_day_reason": zreason
         }
     except Exception as e:
         print(f"Quick scan error: {e}")
-        return {"error": str(e)}
+        return {"error": str(e), "score": 0, "risk_level": "ERROR"}
 
 @app.post("/scan/deep")
 async def scan_deep(data: ScanRequest) -> dict:
@@ -513,10 +507,14 @@ async def scan_deep(data: ScanRequest) -> dict:
     try:
         score, _, _, _, _, _, _, _ = compute_risk(data.code)
         ai_report = await get_hybrid_ai_report(data.code, score)
-        return ai_report
+        return {
+            "worst_case": ai_report.get("worst_case", "Analysis complete."),
+            "attack_story": ai_report.get("story", "Breach possibility detected."),
+            "recommendation": "Immediate remediation recommended. Follow secure coding standards."
+        }
     except Exception as e:
         print(f"Deep scan error: {e}")
-        return {"exact_analysis": "AI analysis unavailable.", "worst_case": "N/A", "story": "N/A"}
+        return {"worst_case": "AI analysis unavailable.", "attack_story": "N/A", "recommendation": "Review risky patterns."}
 
 
 # Optimized Scan Route with Local Error Handling
