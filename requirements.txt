@@ -11,5 +11,5 @@ numpy
 python-multipart
 nltk
 google-generativeai
-fpdf
+fpdf2
 openai
