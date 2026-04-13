@@ -130,18 +130,23 @@ def save_to_dataset(code: str) -> None:
         writer.writerow([code, "LOW_RISK"])
 
 
-async def groq_chat_safe(system_message: str, user_prompt: str, max_tokens: int = 300):
-    response = await asyncio.to_thread(
-        client.chat.completions.create,
-        model="llama3-8b-8192",
-        messages=[
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_prompt},
-        ],
-        max_tokens=max_tokens,
-        temperature=0.4
-    )
-    return response.choices[0].message.content.strip()
+async def groq_chat_safe(system_message: str, user_prompt: str, max_tokens: int = 800) -> str:
+    """Standardized Groq Helper for all AI features."""
+    try:
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.3
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"⚠️ Groq AI API Error: {e}")
+        return f"AI Service temporarily unavailable. Please apply secure input validation and avoid unsafe execution methods. Details: {str(e)[:50]}"
 
 
 async def auto_retrain_model():
@@ -320,25 +325,27 @@ Return:
 """
 
         text = await groq_chat_safe(
-            "You are a cybersecurity expert.",
+            "You are a cybersecurity expert. Provide a concise 3-part analysis including: 1. Technical DNA, 2. Worst-Case Forecast, 3. Story Analogy.",
             prompt,
-            400
+            800
         )
 
         duration = time.time() - start_time
         print(f"⏱️ [Groq AI Analysis] Duration: {duration:.2fs}")
+        
+        # Ensure we return valid content even if AI is generic
         return {
-            "exact_analysis": text[:300],
-            "worst_case": text[:300],
-            "story": text[:300]
+            "exact_analysis": text[:400] if len(text) > 50 else "Detailed technical review of the identified vulnerability markers.",
+            "worst_case": text[:400] if len(text) > 50 else "Potential for unauthorized code execution or system compromise.",
+            "story": text[:400] if len(text) > 50 else "Like an unlocked back door that allows an intruder to enter your system."
         }
 
     except Exception as e:
         print(f"Groq Deep Analysis Error: {e}")
         return {
-            "exact_analysis": "Security review complete.",
-            "worst_case": "Potential system compromise.",
-            "story": "Attack path identified."
+            "exact_analysis": "CyberGuard analysis complete. Review highlighted markers.",
+            "worst_case": "Potential security breach or data exposure if unpatched.",
+            "story": "A security gap detected in your application logic."
         }
 
 
@@ -357,16 +364,16 @@ Return only fixed code.
 """
 
         patch = await groq_chat_safe(
-            "You are a senior secure coding engineer.",
+            "You are a senior secure coding engineer. Return ONLY the fixed code block. No explanation.",
             prompt,
-            400
+            800
         )
         duration = time.time() - start_time
         print(f"⏱️ [Groq AI Patching] Duration: {duration:.2fs}")
         return patch
 
     except Exception:
-        return "Secure patch generation failed."
+        return "AI patch generation temporarily unavailable. Please apply secure input validation and avoid unsafe execution methods."
 
 async def build_scan_response(code_text: str, source_meta: dict | None = None) -> dict:
     # 1. Check Cache First
@@ -606,7 +613,7 @@ async def chat_with_cyberguard(data: ChatRequest) -> dict:
         answer = await groq_chat_safe(
             system_message,
             prompt,
-            300
+            500
         )
         if "[VALID]" in answer.upper():
             save_to_dataset(data.code_context)
@@ -643,7 +650,7 @@ async def submit_feedback(data: FeedbackRequest) -> dict:
             await groq_chat_safe(
                 system_message,
                 f"Code to verify: {code}",
-                100
+                150
             )
         ).upper()
         ai_is_vulnerable = "YES" in ai_verdict_text
@@ -670,9 +677,9 @@ async def submit_feedback(data: FeedbackRequest) -> dict:
         # Scenario 3: Both Agree it is Safe - Reject User Suggestion
         explanation_prompt = f"The user thinks this code is unsafe: {code}. Explain why it is actually safe in 1-2 short sentences."
         explanation_text = await groq_chat_safe(
-            "You are a senior security reviewer.",
+            "You are a senior security reviewer. Explain why the code is safe in 2 short sentences.",
             explanation_prompt,
-            120
+            200
         )
         response_result = {
             "status": "rejected",
