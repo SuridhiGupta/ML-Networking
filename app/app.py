@@ -348,11 +348,11 @@ def generate_pdf_report(report: dict) -> bytes:
 
     pdf.set_font("helvetica", "", 11)
     pdf.multi_cell(
-    0,
-    6,
-    clean_text(
-        "Immediate remediation recommended. Avoid dangerous execution functions, validate user inputs, and apply secure coding practices before deployment."
-    )
+        0,
+        6,
+        clean_text(
+            "Immediate remediation recommended. Avoid dangerous execution functions, validate user inputs, and apply secure coding practices before deployment."
+        )
 )
 
     return bytes(pdf.output())
