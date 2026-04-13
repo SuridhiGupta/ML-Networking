@@ -369,7 +369,7 @@ def generate_pdf_report(report: dict) -> bytes:
         )
 )
 
-    return bytes(pdf.output())
+    return pdf.output(dest='S').encode('latin-1')
 
 def render_step_flow() -> None:
     report = st.session_state.get("report")
