@@ -1,6 +1,7 @@
 import os
 import sys
 from datetime import datetime
+import time
 
 import pandas as pd
 import requests
@@ -14,7 +15,7 @@ if PROJECT_ROOT not in sys.path:
 if SRC_ROOT not in sys.path:
     sys.path.insert(0, SRC_ROOT)
 
-SERVER_URL = "https://cyberguard-api.onrender.com"
+SERVER_URL = "https://cyberguard-api-v69u.onrender.com"
 
 def apply_ui() -> None:
     style = """
@@ -244,14 +245,27 @@ def run_scan(mode: str, text: str | None = None, repo_url: str | None = None, up
                 return
 
         # 2. Deep AI Analysis (Step 2 - Patch)
-        with st.status("Deep AI Security Analysis...", expanded=False) as status:
+        with st.status("🔍 Deep AI Security Analysis...", expanded=True) as status:
             try:
+                status.write("🧬 Analyzing Technical DNA...")
+                time.sleep(1.2)
+                
+                status.write("📉 Forecasting Worst-Case Scenarios...")
+                time.sleep(0.8)
+                
                 deep_resp = requests.post(f"{SERVER_URL}/scan/deep", json={"code": text}, timeout=120)
                 if deep_resp.status_code == 200:
                     deep_data = deep_resp.json()
-                    # Merge deep data (Expert Analysis, Worst Case, etc.) into the report
+                    
+                    status.write("📖 Crafting Attack Path Story...")
+                    time.sleep(0.6)
+                    
+                    # Merge deep data into the report
                     st.session_state.report = {**st.session_state.report, **deep_data}
+                    st.session_state.is_new_scan = True # Flag for staggered reveal
+                    
                     status.update(label="✅ Full Analysis Complete!", state="complete", expanded=False)
+                    time.sleep(0.5)
                     st.rerun()
             except Exception:
                 status.update(label="⚠️ AI Analysis partially unavailable.", state="error")
@@ -362,12 +376,20 @@ def render_step_flow() -> None:
     if not report:
         return
 
+    # --- Patched Sequential Reveal ---
+    is_new = st.session_state.get("is_new_scan", False)
+    
     st.subheader("Step 1: Risk Score and Code Highlights")
+    
+    # 1. Score & Chip
     col_chip, col_download = st.columns([1, 1])
     with col_chip:
         render_risk_chip(report.get("final_risk", "LOW"))
         st.write(f"Risk Score: **{report.get('score', 0):.2f} / 10.0** | Confidence: **{report.get('confidence', 'N/A')}**")
     
+    if is_new: time.sleep(0.6)
+    
+    # 2. PDF Download
     with col_download:
         pdf_bytes = generate_pdf_report(report)
         st.download_button(
@@ -378,17 +400,30 @@ def render_step_flow() -> None:
             use_container_width=True
         )
 
+    if is_new: time.sleep(0.5)
+
+    # 3. Worst Case
     with st.expander("🚨 Worst Case Scenario", expanded=True):
         st.write(report.get("worst_case", "Analysis pending..."))
         
-    with st.expander("📖 The Story / Attack Path"):
+    if is_new: time.sleep(0.5)
+        
+    # 4. Attack Story
+    with st.expander("📖 The Story / Attack Path", expanded=is_new):
         st.write(report.get("story", "Analysis pending..."))
         
-    with st.expander("🦠 Zero-Day Potential"):
+    if is_new: time.sleep(0.5)
+        
+    # 5. Zero-Day
+    with st.expander("🦠 Zero-Day Potential", expanded=False):
         if report.get("is_zero_day"):
             st.error(f"WARNING: Highly deceptive zero-day pattern detected! {report.get('zero_day_reason', '')}")
         else:
             st.success("No immediate zero-day behavioral patterns found. Standard analysis applies.")
+    
+    # Reset flag so it doesn't re-animate on every interaction
+    if is_new:
+        st.session_state.is_new_scan = False
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -606,6 +641,8 @@ def main() -> None:
         st.session_state.chat_open = False
     if "active_tab" not in st.session_state:
         st.session_state.active_tab = "Description/Code"
+    if "is_new_scan" not in st.session_state:
+        st.session_state.is_new_scan = False
 
     _, col_center, _ = st.columns([1, 5, 1])
 

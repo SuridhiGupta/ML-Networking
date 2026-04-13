@@ -1,4 +1,5 @@
 import asyncio
+import time
 import csv
 import hashlib
 import re
@@ -55,6 +56,27 @@ for path in [PENDING_FEEDBACK_PATH, TRAINING_DATASET_PATH, PROCESSED_TRAINING_PA
 
 app = FastAPI(title="CyberGuard API")
 
+# --- GLOBAL MODEL CACHE (Load once at startup) ---
+GLOBAL_BOOSTER = None
+GLOBAL_VECTORIZER = None
+GLOBAL_LABEL_ENCODER = None
+
+def load_ml_resources():
+    global GLOBAL_BOOSTER, GLOBAL_VECTORIZER, GLOBAL_LABEL_ENCODER
+    try:
+        if MODEL_PATH.exists() and VECTORIZER_PATH.exists():
+            print("📦 Loading ML Models into memory...")
+            GLOBAL_BOOSTER = xgb.Booster()
+            GLOBAL_BOOSTER.load_model(str(MODEL_PATH))
+            GLOBAL_VECTORIZER = joblib.load(VECTORIZER_PATH)
+            if LABEL_ENCODER_PATH.exists():
+                GLOBAL_LABEL_ENCODER = joblib.load(LABEL_ENCODER_PATH)
+            print("✅ Models loaded successfully.")
+    except Exception as e:
+        print(f"❌ Error loading ML resources: {e}")
+
+load_ml_resources()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,7 +98,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"report": None, "error": "Internal Server Error", "detail": str(exc)},
     )
 
-ollama_semaphore = asyncio.Semaphore(1)
+
 
 
 class ScanRequest(BaseModel):
@@ -185,6 +207,9 @@ async def auto_retrain_model():
             
         print("Automatic Retraining Complete. Model updated.")
         
+        # Refresh Global Cache
+        load_ml_resources()
+        
     except Exception as e:
         print(f"Auto-retrain failed: {e}")
 
@@ -194,21 +219,19 @@ def enforce_two_lines(text: str) -> str:
     return "\n".join(lines[:2]) if lines else "Analysis pending..."
 
 
-def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bool, str | None, str]:
+def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bool, str | None, str, bool]:
+    start_time = time.time()
     ml_confidence = 0.5
-    if MODEL_PATH.exists() and VECTORIZER_PATH.exists():
+    
+    # Use Global Cache instead of loading from disk every time
+    if GLOBAL_BOOSTER and GLOBAL_VECTORIZER:
         try:
-            booster = xgb.Booster()
-            booster.load_model(str(MODEL_PATH))
-            vectorizer = joblib.load(VECTORIZER_PATH)
-            
-            # Application of official clean_text for consistency
             cleaned_code = clean_text(code_text)
-            dmatrix = xgb.DMatrix(vectorizer.transform([cleaned_code]))
-            
-            prediction = booster.predict(dmatrix)[0]
+            dmatrix = xgb.DMatrix(GLOBAL_VECTORIZER.transform([cleaned_code]))
+            prediction = GLOBAL_BOOSTER.predict(dmatrix)[0]
             ml_confidence = float(np.max(prediction)) if isinstance(prediction, np.ndarray) else float(prediction)
-        except Exception:
+        except Exception as e:
+            print(f"ML Inference Error: {e}")
             ml_confidence = 0.5
 
     risk_keywords = [
@@ -274,10 +297,13 @@ def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bo
             "are present together."
         )
 
+    duration = time.time() - start_time
+    print(f"⏱️ [ML Prediction] Duration: {duration:.2fs}")
     return final_score, final_risk, flagged_lines, highlighted_code, is_zero_day, zero_day_reason, f"{ml_confidence * 100:.1f}%", is_boosted
 
 
 async def get_hybrid_ai_report(code_snippet: str, score: float) -> dict:
+    start_time = time.time()
     try:
         prompt = f"""
 Analyze this code vulnerability.
@@ -299,6 +325,8 @@ Return:
             400
         )
 
+        duration = time.time() - start_time
+        print(f"⏱️ [Groq AI Analysis] Duration: {duration:.2fs}")
         return {
             "exact_analysis": text[:300],
             "worst_case": text[:300],
@@ -315,6 +343,7 @@ Return:
 
 
 async def get_secure_patch(code_snippet: str, score: float) -> str:
+    start_time = time.time()
     try:
         prompt = f"""
 Fix this vulnerable code securely.
@@ -327,11 +356,14 @@ Risk score: {score}
 Return only fixed code.
 """
 
-        return await groq_chat_safe(
+        patch = await groq_chat_safe(
             "You are a senior secure coding engineer.",
             prompt,
             400
         )
+        duration = time.time() - start_time
+        print(f"⏱️ [Groq AI Patching] Duration: {duration:.2fs}")
+        return patch
 
     except Exception:
         return "Secure patch generation failed."
@@ -415,6 +447,34 @@ async def build_scan_response(code_text: str, source_meta: dict | None = None) -
     return final_response
 
 
+@app.get("/")
+async def root():
+    return {
+        "status": "live", 
+        "service": "CyberGuard API",
+        "timestamp": datetime.now().isoformat() if "datetime" in globals() else time.ctime()
+    }
+
+
+@app.get("/debug/config")
+async def debug_config():
+    """Diagnostic route to verify environment without exposing full secrets."""
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    return {
+        "groq_api_key_set": bool(groq_key),
+        "groq_api_key_masked": f"{groq_key[:4]}...{groq_key[-4:]}" if len(groq_key) > 8 else "too_short/null",
+        "model_files_present": {
+            "booster": MODEL_PATH.exists(),
+            "vectorizer": VECTORIZER_PATH.exists(),
+            "encoder": LABEL_ENCODER_PATH.exists()
+        },
+        "cache_status": {
+            "booster_loaded": GLOBAL_BOOSTER is not None,
+            "vectorizer_loaded": GLOBAL_VECTORIZER is not None
+        }
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "llm": "groq_connected"}
@@ -422,6 +482,7 @@ async def health():
 
 @app.post("/scan/quick")
 async def scan_quick(data: ScanRequest) -> dict:
+    print(f"---> Incoming POST: /scan/quick")
     """Returns ML-only result instantly."""
     try:
         score, risk, flagged, highlighted, zday, zreason, conf, boosted = compute_risk(data.code)
@@ -454,6 +515,7 @@ async def scan_deep(data: ScanRequest) -> dict:
 # Optimized Scan Route with Local Error Handling
 @app.post("/scan")
 async def scan_code(data: ScanRequest) -> dict:
+    print(f"---> Incoming POST: /scan")
     try:
         return await build_scan_response(data.code, source_meta={"input_mode": "manual_text"})
     except Exception as e:
@@ -524,6 +586,7 @@ async def scan_solution(data: SolutionRequest) -> dict:
 
 @app.post("/chat")
 async def chat_with_cyberguard(data: ChatRequest) -> dict:
+    print(f"---> Incoming POST: /chat")
     system_message = (
         "You are CyberGuard Assistant, a friendly security expert. "
         "IMPORTANT: Provide direct, short, and concise answers only. "
@@ -541,10 +604,10 @@ async def chat_with_cyberguard(data: ChatRequest) -> dict:
             prompt = user_input
 
         answer = await groq_chat_safe(
-    system_message,
-    prompt,
-    300
-)
+            system_message,
+            prompt,
+            300
+        )
         if "[VALID]" in answer.upper():
             save_to_dataset(data.code_context)
             answer = f"Verified and saved. {answer.replace('[VALID]', '').strip()}"
@@ -558,6 +621,7 @@ async def chat_with_cyberguard(data: ChatRequest) -> dict:
 
 @app.post("/feedback")
 async def submit_feedback(data: FeedbackRequest) -> dict:
+    print(f"---> Incoming POST: /feedback")
     code = data.code_context.strip()
     if not code:
         return {"status": "error", "message": "Empty code context."}
@@ -576,12 +640,12 @@ async def submit_feedback(data: FeedbackRequest) -> dict:
     )
     try:
         ai_verdict_text = (
-    await groq_chat_safe(
-        system_message,
-        f"Code to verify: {code}",
-        100
-    )
-).upper()
+            await groq_chat_safe(
+                system_message,
+                f"Code to verify: {code}",
+                100
+            )
+        ).upper()
         ai_is_vulnerable = "YES" in ai_verdict_text
     except Exception:
         return {"status": "pending", "message": "AI verification failed. Suggestion held in pending."}
@@ -606,10 +670,10 @@ async def submit_feedback(data: FeedbackRequest) -> dict:
         # Scenario 3: Both Agree it is Safe - Reject User Suggestion
         explanation_prompt = f"The user thinks this code is unsafe: {code}. Explain why it is actually safe in 1-2 short sentences."
         explanation_text = await groq_chat_safe(
-    "You are a senior security reviewer.",
-    explanation_prompt,
-    120
-)
+            "You are a senior security reviewer.",
+            explanation_prompt,
+            120
+        )
         response_result = {
             "status": "rejected",
             "message": "Suggestion rejected. Our security engine confirms this code pattern is safe.",
@@ -626,4 +690,7 @@ async def submit_feedback(data: FeedbackRequest) -> dict:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import os
+    port = int(os.getenv("PORT", 8000))
+    print(f"🚀 Starting CyberGuard on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
