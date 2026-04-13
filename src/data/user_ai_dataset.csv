@@ -1,0 +1,5 @@
+code_context,label
+import os,LOW_RISK
+import os,LOW_RISK
+"import os
+os.system('whoami')",LOW_RISK
