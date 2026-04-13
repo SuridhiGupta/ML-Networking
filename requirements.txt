@@ -12,3 +12,4 @@ numpy
 python-multipart
 nltk
 google-generativeai
+fpdf
