@@ -16,6 +16,7 @@ if SRC_ROOT not in sys.path:
     sys.path.insert(0, SRC_ROOT)
 
 SERVER_URL = "https://cyberguard-api-v69u.onrender.com"
+APP_VERSION = "3.0.0"
 
 def apply_ui() -> None:
     style = """
@@ -683,7 +684,8 @@ def main() -> None:
     render_step_flow()
     render_floating_chatbot()
 
-    st.caption(f"CyberGuard is AI and can make mistakes. Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.caption(f"CyberGuard v{APP_VERSION} | AI can make mistakes. Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.markdown(f"<div style='text-align: center; color: #475569; font-size: 0.8rem;'>Sync Version: {APP_VERSION}</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()

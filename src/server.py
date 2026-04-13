@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+APP_VERSION = "3.0.0"
 import time
 import csv
 import hashlib
@@ -132,7 +133,7 @@ def save_to_dataset(code: str) -> None:
 
 
 async def groq_chat_safe(system_message: str, user_prompt: str, max_tokens: int = 800) -> str:
-    """Standardized Groq Helper for all AI features."""
+    """Standardized Groq Helper for all AI features (v3.0.0)."""
     try:
         response = await asyncio.to_thread(
             client.chat.completions.create,
@@ -146,7 +147,7 @@ async def groq_chat_safe(system_message: str, user_prompt: str, max_tokens: int 
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"⚠️ Groq AI API Error: {e}")
+        print(f"⚠️ [V3_DEBUG] Groq AI API Error: {e}")
         return f"AI Service temporarily unavailable. Details: {str(e)[:50]}"
 
 
@@ -264,7 +265,13 @@ def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bo
     has_dangerous_calls = any(token in code_text for token in ["os.", "exec", "eval"])
     is_zero_day = has_network and has_dangerous_calls
 
+    has_user_input = "input(" in code_text or "request.form" in code_text or "request.args" in code_text
+    is_user_injection = has_user_input and (is_rce or is_sqli)
+
     base_cvss = min(((0.5 if flagged_lines else 0.0) + (0.4 if is_zero_day else 0.0)) * 10.0, 10.0)
+    if is_user_injection:
+        base_cvss = max(base_cvss, 9.2) # Force High/Critical for injection
+    
     if base_cvss == 0.0:
         base_cvss = 1.0
 
@@ -277,12 +284,9 @@ def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bo
             final_score = boosted
             is_boosted = True
 
-    is_rce = "exec(" in code_text or "eval(" in code_text or "os.system" in code_text or "subprocess." in code_text
-    is_sqli = "SELECT " in code_text.upper() or "DROP TABLE" in code_text.upper() or "cursor.execute" in code_text
-
-    if ml_confidence > 0.85 and (is_rce or is_sqli):
+    if ml_confidence > 0.85 and (is_rce or is_sqli or is_user_injection):
         if final_score < 7.0:
-            final_score = 8.5
+            final_score = 9.5
         is_boosted = True
 
     final_score = min(final_score, 10.0)
@@ -424,19 +428,22 @@ async def build_scan_response(code_text: str, source_meta: dict | None = None) -
     ai_report = await get_hybrid_ai_report(code_text, score)
 
     final_response = {
+        "v": APP_VERSION,
         "risk_level": risk,
-        "score": round(score, 2),
+        "score": round(final_score, 2),
         "confidence": confidence,
-        "worst_case": ai_report.get("worst_case", "Analysis complete."),
-        "attack_story": ai_report.get("story", "Breach possibility detected."),
-        "zero_day": zero_day_reason or "No immediate zero-day behavioral patterns found.",
-        "recommendation": "Immediate remediation recommended. Avoid dangerous execution functions, validate user inputs, and apply secure coding practices.",
-        "patch": "Click 'Get AI Solution?' to generate a secure code fix.",
+        "worst_case": ai_report.get("worst_case", "Critical vulnerability in system core."),
+        "attack_story": ai_report.get("story", "Dangerous execution pattern detected."),
+        "zero_day": zero_day_reason or "No zero-day behavioral patterns found.",
+        "recommendation": "Security remediation required. Mitigate RCE/Injection risks.",
+        "patch": "Click 'Get AI Solution?' to generate fix.",
         "original_code": code_text,
         "flagged_lines": flagged_lines,
         "highlighted_code": highlighted_code,
     }
 
+    print(f"📦 [V3_DEBUG] Returning Response: Score {final_response['score']}, Risk {final_response['risk_level']}")
+    
     # Update cache (with size management)
     if len(scan_cache) >= MAX_CACHE_SIZE:
         scan_cache.clear()
@@ -448,9 +455,10 @@ async def build_scan_response(code_text: str, source_meta: dict | None = None) -
 @app.get("/")
 async def root():
     return {
+        "v": APP_VERSION,
         "status": "live", 
         "service": "CyberGuard API",
-        "timestamp": datetime.now().isoformat() if "datetime" in globals() else time.ctime()
+        "timestamp": datetime.now().isoformat()
     }
 
 
@@ -459,6 +467,7 @@ async def debug_config():
     """Diagnostic route to verify environment without exposing full secrets."""
     groq_key = os.getenv("GROQ_API_KEY", "")
     return {
+        "v": APP_VERSION,
         "groq_api_key_set": bool(groq_key),
         "groq_api_key_masked": f"{groq_key[:4]}...{groq_key[-4:]}" if len(groq_key) > 8 else "too_short/null",
         "model_files_present": {
