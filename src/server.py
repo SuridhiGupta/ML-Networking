@@ -246,11 +246,6 @@ def compute_risk(code_text: str) -> tuple[float, str, list[dict], list[dict], bo
             final_score = 8.5
         is_boosted = True
 
-    if any(k in code_text for k in ["pickle.loads", "pickle.load", "yaml.load"]):
-        if final_score < 7.0:
-            final_score = 7.5
-        is_boosted = True
-
     final_score = min(final_score, 10.0)
 
     if final_score >= 8.5 or is_zero_day:
